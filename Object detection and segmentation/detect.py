@@ -5,7 +5,8 @@ model = YOLO("yolov8n.pt")
 
 #输入测试图片
 pathofimage = "./Object detection and segmentation/test_image.jpg"
-results = model(pathofimage)
+confidence_threshold = 0.5                                              #过滤掉置信度低于0.5的结果
+results = model(pathofimage, conf=confidence_threshold)
 
 #目前只有一张测试图片 所以只用取出第一张图片的检测结果
 result = results[0]
