@@ -47,6 +47,46 @@ def get_mimo_answer(messages):
     return answer
 
 
+#使用链式思考（CoT）提示分析用户的问题或要求
+def get_mimo_analysis(messages):
+    analysis_messages = messages.copy()                          #复制聊天记录 避免改变原来的内容
+
+    analysis_prompt = {                                          #设置分步分析要求
+        "role": "user",
+        "content": (
+            "请分析我上一条消息中的问题或要求。"
+            "按照以下步骤进行："
+            "1.确定用户想解决的问题或完成的事情；"
+            "2.提取对话或图片中的有关信息；"
+            "3.判断现有信息是否足够；"
+            "4.整理回应思路。"
+            "只输出简短的分析结果，暂时不要给出最终回答。"
+        )
+    }
+
+    analysis_messages.append(analysis_prompt)                    #把分析要求加入复制出的聊天记录
+    analysis = get_mimo_answer(analysis_messages)                #让MiMo完成分步分析
+
+    return analysis
+
+#使用链式提示（Prompt Chaining）根据分析结果生成最终回答
+def get_mimo_final_answer(messages, analysis):
+    final_messages = messages.copy()                             #复制聊天记录 避免加入内部提示
+
+    final_prompt = {
+        "role": "user",
+        "content": (
+            f"下面是对我上一条消息的分析结果：\n{analysis}\n"
+            "请根据这份分析结果回应我上一条消息。"
+            "只输出最终回答，不要再次展示分析过程。"
+        )
+    }
+
+    final_messages.append(final_prompt)                          #把第一次调用的结果交给第二次调用
+    answer = get_mimo_answer(final_messages)
+
+    return answer
+
 #根据图片路径和问题建立图文消息
 def create_image_message(image_path, question):
     image_base64 = image_to_base64(image_path)                   #把图片转换成Base64文本
@@ -132,7 +172,11 @@ while True:
         }
 
     messages.append(user_message)                                #把本轮用户消息加入聊天记录
-    answer = get_mimo_answer(messages)
+
+    analysis = get_mimo_analysis(messages)
+    print("analysis：", analysis)                                 #暂时显示分析结果进行测试
+
+    answer = get_mimo_final_answer(messages, analysis)
 
     print("MiMo：", answer)
     messages.append({                                            #把模型回答加入聊天记录
