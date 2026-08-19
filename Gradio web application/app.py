@@ -5,6 +5,7 @@ from chatbot_functions import (
     chat_with_mimo,
     clear_chat
 )
+from digit_functions import predict_digit, clear_digit
 
 #搭建目标检测和图像分割页面
 with gr.Blocks(title="Second Stage Examination") as demo:
@@ -36,7 +37,7 @@ with gr.Blocks(title="Second Stage Examination") as demo:
             confidence_threshold = gr.Slider(
                 minimum=0.1,
                 maximum=1.0,
-                value=0.5,
+                value=0.25,
                 step=0.05,
                 label="置信度阈值",
                 scale=4
@@ -137,6 +138,62 @@ with gr.Blocks(title="Second Stage Examination") as demo:
                 analysis_output,
                 message_input
             ]
+        )
+
+#搭建手写数字识别页面
+    with gr.Tab("手写数字识别"):
+        gr.Markdown("在画板上写下一个0到9的数字，然后使用第一阶段训练的BP网络进行识别。")
+
+        with gr.Row():
+            digit_input = gr.Sketchpad(
+                type="pil",                                 #把画板内容转换成PIL图片
+                image_mode="RGBA",
+                canvas_size=(280, 280),
+                height=350,
+                brush=gr.Brush(
+                    default_size=6,
+                    colors=["#000000"],
+                    default_color="#000000",
+                    color_mode="fixed"
+                ),
+                label="手写板"
+            )
+
+            with gr.Column():
+                digit_output = gr.Markdown(
+                    value="预测结果"
+                )
+
+                probability_output = gr.Label(
+                    label="概率最高的三个数字",
+                    num_top_classes=3
+                )
+
+                recognize_button = gr.Button(
+                    value="开始识别",
+                    variant="primary"
+                )
+
+                clear_digit_button = gr.Button(
+                    value="清空识别结果"
+                )
+
+        recognize_button.click(                             #点击后把画板内容交给识别函数
+            fn=predict_digit,
+            inputs=digit_input,
+            outputs=[
+                digit_output,
+                probability_output
+            ]
+        )
+
+        clear_digit_button.click(                           #画板使用自带的垃圾桶清空
+            fn=clear_digit,
+            outputs=[
+                digit_output,
+                probability_output
+            ],
+            queue=False
         )
 
 if __name__ == "__main__":
