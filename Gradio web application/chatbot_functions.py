@@ -1,0 +1,223 @@
+import os
+import base64                                                    #通过API调用MiMo不支持直传本地文件 只支持Base64
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+#读取.env文件中的API Key
+load_dotenv()
+
+
+#创建连接MiMo的客户端
+client = OpenAI(                                                            
+    api_key=os.environ.get("MIMO_API_KEY"),
+    base_url="https://api.xiaomimimo.com/v1"
+)
+
+#把传入图片转换成Base64文本
+def image_to_base64(image_path):
+    image_file = open(image_path, "rb")                          #用二进制方式打开图片
+    image_bytes = image_file.read()                              #读取图片的二进制数据
+    image_file.close()                                           #读取完成后关闭图片文件
+
+    base64_bytes = base64.b64encode(image_bytes)                 #把图片数据编码成Base64
+    base64_text = base64_bytes.decode("utf-8")                   #把编码结果转换成普通字符串
+
+    return base64_text
+
+#给MiMo发送聊天记录并取出回答
+def get_mimo_answer(messages):
+    completion = client.chat.completions.create(
+        model="mimo-v2.5",
+        messages=messages,                                       #把目前为止的所有聊天记录发给模型
+        max_completion_tokens=1024,
+        temperature=1.0,
+        top_p=0.95,
+        stream=False,
+        stop=None,
+        frequency_penalty=0,
+        presence_penalty=0
+    )
+
+    choices = completion.choices                                 #取出候选回复列表
+    first_choice = choices[0]                                    #取出第一个候选回复
+    message = first_choice.message                               #取出回复消息
+    answer = message.content                                     #取出消息正文
+
+    return answer
+
+
+#使用链式思考（CoT）提示分析用户的问题或要求
+def get_mimo_analysis(messages):
+    analysis_messages = messages.copy()                          #复制聊天记录 避免改变原来的内容
+
+    analysis_prompt = {                                          #设置分步分析要求
+        "role": "user",
+        "content": (
+            "请分析我上一条消息中的问题或要求。"
+            "按照以下步骤进行："
+            "1.确定用户想解决的问题或完成的事情；"
+            "2.提取对话或图片中的有关信息；"
+            "3.判断现有信息是否足够；"
+            "4.整理回应思路。"
+            "只输出简短的分析结果，暂时不要给出最终回答。"
+        )
+    }
+
+    analysis_messages.append(analysis_prompt)                    #把分析要求加入复制出的聊天记录
+    analysis = get_mimo_answer(analysis_messages)                #让MiMo完成分步分析
+
+    return analysis
+
+#使用链式提示（Prompt Chaining）根据分析结果生成最终回答
+def get_mimo_final_answer(messages, analysis):
+    final_messages = messages.copy()                             #复制聊天记录 避免加入内部提示
+
+    final_prompt = {
+        "role": "user",
+        "content": (
+            f"下面是对我上一条消息的分析结果：\n{analysis}\n"
+            "请根据这份分析结果回应我上一条消息。"
+            "只输出最终回答，不要再次展示分析过程。"
+        )
+    }
+
+    final_messages.append(final_prompt)                          #把第一次调用的结果交给第二次调用
+    answer = get_mimo_answer(final_messages)
+
+    return answer
+
+#根据图片路径和问题建立图文消息
+def create_image_message(image_path, question):
+    image_base64 = image_to_base64(image_path)                   #把图片转换成Base64文本
+
+    #根据扩展名确定图片类型
+    path_parts = os.path.splitext(image_path)                    #把图片路径拆成文件名和扩展名
+    file_extension = path_parts[1]
+    file_extension = file_extension.lower()                      #把大写扩展名转换成小写
+
+    if file_extension == ".jpg" or file_extension == ".jpeg":
+        image_type = "image/jpeg"
+    elif file_extension == ".png":
+        image_type = "image/png"
+    else:
+        raise ValueError("目前只支持JPG、JPEG和PNG格式的图片")
+
+    #给Base64文本添加图片类型和编码信息
+    base64_prefix = "data:" + image_type + ";base64,"
+    image_data_url = base64_prefix + image_base64
+
+
+    image_part = {                                               #保存图片内容
+        "type": "image_url",
+        "image_url": {
+            "url": image_data_url
+        }
+    }
+
+    text_part = {                                                #保存对图片提出的问题
+        "type": "text",
+        "text": question
+    }
+
+    image_user_message = {                                       #把图片和问题合并成一条用户消息
+        "role": "user",
+        "content": [
+            image_part,
+            text_part
+        ]
+    }
+
+    return image_user_message
+
+
+#设置系统提示 建立聊天记录
+system_message = {
+    "role": "system",
+    "content": "你是小米开发的MiMo智能助手。请使用中文回答。如果无法根据当前对话确定答案，要明确说明不知道，不要随意猜测。"
+}
+
+
+#建立一份新的聊天记录
+def create_message_history():
+    messages = [system_message.copy()]                           #每个网页会话都从单独的一份系统提示开始
+    return messages
+
+
+#处理网页提交的文字或图片消息
+def chat_with_mimo(user_input, chat_history, messages):
+    if user_input is None:
+        raise ValueError("请输入文字或上传图片")
+
+    user_text = user_input["text"].strip()                       #MultimodalTextbox会把文字和文件放进同一个字典
+    image_files = user_input["files"]
+
+    if user_text == "" and len(image_files) == 0:
+        raise ValueError("请输入文字或上传图片")
+
+    if len(image_files) > 0:
+        image_path = image_files[0]                              #目前只处理一张上传图片
+
+        if user_text == "":
+            user_text = "请描述这张图片"
+
+        user_message = create_image_message(
+            image_path,
+            user_text
+        )
+
+        chat_history.append({                                    #在聊天区域中分别显示图片和问题
+            "role": "user",
+            "content": {
+                "path": image_path
+            }
+        })
+        chat_history.append({
+            "role": "user",
+            "content": user_text
+        })
+
+    else:
+        user_message = {
+            "role": "user",
+            "content": user_text
+        }
+
+        chat_history.append({
+            "role": "user",
+            "content": user_text
+        })
+
+    messages.append(user_message)                               #API聊天记录还需要保存图片的Base64内容
+
+    analysis = get_mimo_analysis(messages)
+    answer = get_mimo_final_answer(messages, analysis)
+
+    messages.append({
+        "role": "assistant",
+        "content": answer
+    })
+    chat_history.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+    empty_input = {
+        "text": "",
+        "files": []
+    }
+
+    return chat_history, messages, analysis, empty_input
+
+
+#清空页面并重新建立聊天记录
+def clear_chat():
+    chat_history = []
+    messages = create_message_history()
+    analysis = ""
+    empty_input = {
+        "text": "",
+        "files": []
+    }
+
+    return chat_history, messages, analysis, empty_input
